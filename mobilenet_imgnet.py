@@ -9,7 +9,6 @@ from torchvision import datasets, transforms
 from torchvision.datasets.folder import default_loader
 from torch.utils.data import Dataset, DataLoader
 
-# ======== Tự implement MobileNetV2 ========
 def conv_bn(inp, oup, stride):
     return nn.Sequential(
         nn.Conv2d(inp, oup, 3, stride, 1, bias=False),
@@ -76,7 +75,6 @@ class MobileNetV2(nn.Module):
         x = self.pool(x).view(x.size(0), -1)
         return self.classifier(x)
 
-# ======== Tải và xử lý dữ liệu Tiny ImageNet ========
 base_dir = "E:/T3"
 zip_path = os.path.join(base_dir, "tiny-imagenet-200.zip")
 extract_path = os.path.join(base_dir, "tiny-imagenet-200")
@@ -92,7 +90,9 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 transform_train = transforms.Compose([
     transforms.RandomResizedCrop(224),
     transforms.RandomHorizontalFlip(),
-    transforms.ColorJitter(0.1, 0.1, 0.1),
+    transforms.RandomRotation(10),
+    transforms.ColorJitter(0.2, 0.2, 0.2),
+    transforms.RandomGrayscale(p=0.1),
     transforms.ToTensor(),
     transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
 ])
@@ -107,17 +107,18 @@ val_dir = os.path.join(extract_path, "val")
 train_dataset = datasets.ImageFolder(train_dir, transform=transform_train)
 train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True, pin_memory=True)
 
-def parse_val_folder(val_dir):
-    images, labels, label_map = [], [], {}
+def parse_val_folder(val_dir, class_to_idx):
+    images, labels = [], []
     with open(os.path.join(val_dir, "val_annotations.txt")) as f:
         for line in f:
             filename, class_id = line.split("\t")[:2]
-            label_map.setdefault(class_id, len(label_map))
-            images.append(os.path.join(val_dir, "images", filename))
-            labels.append(label_map[class_id])
-    return images, labels, label_map
+            if class_id in class_to_idx:
+                label = class_to_idx[class_id]
+                images.append(os.path.join(val_dir, "images", filename))
+                labels.append(label)
+    return images, labels
 
-val_images, val_labels, label_map = parse_val_folder(val_dir)
+val_images, val_labels = parse_val_folder(val_dir, train_dataset.class_to_idx)
 
 class TinyValDataset(Dataset):
     def __init__(self, images, labels, transform):
@@ -135,15 +136,16 @@ class TinyValDataset(Dataset):
 val_dataset = TinyValDataset(val_images, val_labels, transform_val)
 val_loader = DataLoader(val_dataset, batch_size=64, shuffle=False, pin_memory=True)
 
-# ======== Huấn luyện ========
 model = MobileNetV2().to(device)
-criterion = nn.CrossEntropyLoss()
+criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
 optimizer = optim.Adam(model.parameters(), lr=0.0005)
 scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.1)
 
 checkpoint_path = os.path.join(base_dir, "model_checkpoint.pth")
+best_model_path = os.path.join(base_dir, "best_model.pth")
 log_path = os.path.join(base_dir, "training_log.txt")
 start_epoch = 0
+best_acc = 0.0
 epochs = 250
 
 if os.path.exists(checkpoint_path):
@@ -152,7 +154,8 @@ if os.path.exists(checkpoint_path):
     optimizer.load_state_dict(ckpt["optimizer_state"])
     scheduler.load_state_dict(ckpt["scheduler_state"])
     start_epoch = ckpt["epoch"] + 1
-    print(f"Resuming from epoch {start_epoch}")
+    best_acc = ckpt.get("best_acc", 0.0)
+    print(f"Resuming from epoch {start_epoch} | Best acc: {best_acc:.2f}%")
 
 if start_epoch == 0:
     with open(log_path, "w") as f:
@@ -173,6 +176,7 @@ for epoch in range(start_epoch, epochs):
     scheduler.step()
 
     avg_loss = train_loss / len(train_loader)
+
     model.eval()
     correct, total = 0, 0
     with torch.no_grad():
@@ -190,9 +194,17 @@ for epoch in range(start_epoch, epochs):
     with open(log_path, "a") as f:
         f.write(f"{epoch+1}\t{avg_loss:.4f}\t{acc:.2f}\t{epoch_time:.1f}\n")
 
+    # Save last checkpoint
     torch.save({
         "epoch": epoch,
         "model_state": model.state_dict(),
         "optimizer_state": optimizer.state_dict(),
-        "scheduler_state": scheduler.state_dict()
+        "scheduler_state": scheduler.state_dict(),
+        "best_acc": best_acc
     }, checkpoint_path)
+
+    # Save best model
+    if acc > best_acc:
+        best_acc = acc
+        torch.save(model.state_dict(), best_model_path)
+        print(f" New best model saved at epoch {epoch+1} with acc {acc:.2f}%")
