@@ -1,0 +1,4 @@
+E:\In\T8\cnn.py:112: DeprecationWarning: Conversion of an array with ndim > 0 to a scalar is deprecated, and will error in future. Ensure you extract a single element from your array before performing this operation. (Deprecated NumPy 1.25.)
+  out[n,f,i,j] = np.sum(region * self.W[f]) + self.b[f]
+Epoch 1, Loss: 0.4281, Test Accuracy: 0.9190
+(E:\CondaEnv\DangThaiSon_environment) PS E:\In\T8> 
